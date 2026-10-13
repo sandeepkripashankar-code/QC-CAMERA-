@@ -114,13 +114,20 @@ $('#tPw').onclick=()=>{if(stream){window._off=1;camOff()}else{window._off=0;camO
 $('#tFlip').onclick=()=>{facing=facing==='environment'?'user':'environment';camOn()};
 function frame(){if(!video.videoWidth)return null;const c=document.createElement('canvas');c.width=video.videoWidth;c.height=video.videoHeight;c.getContext('2d').drawImage(video,0,0);return c}
 const toBlob=c=>new Promise(r=>c.toBlob(r,'image/jpeg',.97));
+const MAXB=1.5*1024*1024,LONG=2560; /* LONG = longest side in pixels (about 5 MP, roughly 1-1.5 MB) */
+async function limit(b){if(b.size<=MAXB)return b;
+ const bm=await createImageBitmap(b),c=document.createElement('canvas');c.width=bm.width;c.height=bm.height;c.getContext('2d').drawImage(bm,0,0);
+ for(const q of[.8,.65]){const o=await new Promise(r=>c.toBlob(r,'image/jpeg',q));if(o.size<=MAXB)return o}
+ return b}
 async function fullPhoto(){
  try{const t=stream&&stream.getVideoTracks()[0];if(!t||!window.ImageCapture)return null;const ic=new ImageCapture(t),cap=await ic.getPhotoCapabilities();
-  const o={};if(cap.imageWidth&&cap.imageHeight){o.imageWidth=cap.imageWidth.max;o.imageHeight=cap.imageHeight.max}
+  const o={};if(cap.imageWidth&&cap.imageHeight){const W=cap.imageWidth.max,H=cap.imageHeight.max,k=Math.min(1,LONG/Math.max(W,H));
+   o.imageWidth=Math.max(cap.imageWidth.min||0,Math.round(W*k));o.imageHeight=Math.max(cap.imageHeight.min||0,Math.round(H*k))}
   return await ic.takePhoto(o)}catch{return null}}
 async function snap(kind){if(!await need())return;if(!stream)return toast('Camera is off');flash();
  let b=await fullPhoto();if(!b){const c=frame();if(!c)return toast('Camera is off');b=await toBlob(c)}
- const p=kind==='img'?clean(S.sel.art):kind;const n=await save(p,'jpg',b,true);if(n)toast('Saved '+n+' ('+Math.round(b.size/1024)+' KB)')}
+ b=await limit(b);
+ const p=kind==='img'?clean(S.sel.art):kind;save(p,'jpg',b,true).then(n=>n&&toast('Saved '+n+' ('+Math.round(b.size/1024)+' KB)'))}
 $('#bImg').onclick=()=>snap('img');$('#bMaj').onclick=()=>snap('MAJOR');$('#bMin').onclick=()=>snap('MINOR');
 /* ---------- Video ---------- */
 let rec,rt;
@@ -140,7 +147,7 @@ $('#bScan').onclick=async()=>{if(scanning){scanning=false;ui();return}if(!stream
   if(c){try{if(det){const r=await det.detect(c);code=r[0]&&r[0].rawValue}else code=zx.decodeFromCanvas(c).getText()}catch{}}
   if(code){found=true;const g=c.getContext('2d'),h=Math.round(c.height/10);g.fillStyle='rgba(0,0,0,.7)';g.fillRect(0,c.height-h,c.width,h);
    g.fillStyle='#fff';g.font=`bold ${Math.round(h*.55)}px sans-serif`;g.textBaseline='middle';g.fillText('Barcode: '+code,h*.3,c.height-h/2);
-   flash();const n=await save(clean(S.sel.art),'jpg',await toBlob(c),true);toast(n?`${code} → ${n}`:'Save failed',3500);break}
+   flash();const n=await save(clean(S.sel.art),'jpg',await limit(await toBlob(c)),true);toast(n?`${code} → ${n}`:'Save failed',3500);break}
   await sleep(200)}
  if(!found&&scanning)toast('No barcode found');scanning=false;ui()};
 /* ---------- Storage sheet + ZIP export ---------- */
