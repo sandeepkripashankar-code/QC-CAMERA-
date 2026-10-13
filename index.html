@@ -113,9 +113,14 @@ function camOff(){if(rec)rec.stop();scanning=false;stream&&stream.getTracks().fo
 $('#tPw').onclick=()=>{if(stream){window._off=1;camOff()}else{window._off=0;camOn()}};
 $('#tFlip').onclick=()=>{facing=facing==='environment'?'user':'environment';camOn()};
 function frame(){if(!video.videoWidth)return null;const c=document.createElement('canvas');c.width=video.videoWidth;c.height=video.videoHeight;c.getContext('2d').drawImage(video,0,0);return c}
-const toBlob=c=>new Promise(r=>c.toBlob(r,'image/jpeg',.92));
-async function snap(kind){if(!await need())return;const c=frame();if(!c)return toast('Camera is off');flash();
- const p=kind==='img'?clean(S.sel.art):kind;const n=await save(p,'jpg',await toBlob(c),true);if(n)toast('Saved '+n)}
+const toBlob=c=>new Promise(r=>c.toBlob(r,'image/jpeg',.97));
+async function fullPhoto(){
+ try{const t=stream&&stream.getVideoTracks()[0];if(!t||!window.ImageCapture)return null;const ic=new ImageCapture(t),cap=await ic.getPhotoCapabilities();
+  const o={};if(cap.imageWidth&&cap.imageHeight){o.imageWidth=cap.imageWidth.max;o.imageHeight=cap.imageHeight.max}
+  return await ic.takePhoto(o)}catch{return null}}
+async function snap(kind){if(!await need())return;if(!stream)return toast('Camera is off');flash();
+ let b=await fullPhoto();if(!b){const c=frame();if(!c)return toast('Camera is off');b=await toBlob(c)}
+ const p=kind==='img'?clean(S.sel.art):kind;const n=await save(p,'jpg',b,true);if(n)toast('Saved '+n+' ('+Math.round(b.size/1024)+' KB)')}
 $('#bImg').onclick=()=>snap('img');$('#bMaj').onclick=()=>snap('MAJOR');$('#bMin').onclick=()=>snap('MINOR');
 /* ---------- Video ---------- */
 let rec,rt;
