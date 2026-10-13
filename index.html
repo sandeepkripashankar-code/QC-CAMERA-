@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#14181f"><link rel="manifest" href="manifest.json"><link rel="icon" href="icon-192.png">
+<title>QC Camera</title>
+<style>
+:root{--bg:#14181f;--pan:#202733;--line:#344052;--tx:#f1f4f8;--mut:#9aa6b8;--g:#1fa55a;--r:#d93f3f;--a:#e8a317}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{height:100%;margin:0;background:var(--bg);color:var(--tx);font:600 13px/1.25 system-ui,Roboto,sans-serif;overflow:hidden}
+#app{height:100dvh;display:grid;grid-template-columns:1fr 128px;grid-template-rows:auto 1fr;gap:8px;padding:max(8px,env(safe-area-inset-top)) max(8px,env(safe-area-inset-right)) max(8px,env(safe-area-inset-bottom)) max(8px,env(safe-area-inset-left))}
+#top{grid-column:1/3;display:flex;gap:8px}#top button{flex:1;min-height:48px}
+button{border:2px solid var(--line);background:var(--pan);color:var(--tx);border-radius:16px;font:inherit;padding:6px 8px;min-height:44px}
+button:active{transform:scale(.96)}button:disabled{opacity:.5}
+#view{position:relative;background:#000;border-radius:14px;overflow:hidden;border:2px solid var(--line);min-height:0}
+video{width:100%;height:100%;object-fit:contain;display:block}
+#hud{position:absolute;left:8px;top:8px;background:#000a;padding:5px 9px;border-radius:10px;max-width:60%}
+#tools{position:absolute;right:8px;top:8px;display:flex;gap:6px}
+#tools button{min-height:40px;width:40px;padding:0;border-radius:50%;background:#000a;font-size:18px}
+#tools .on{background:var(--g)}
+#toast{position:absolute;left:50%;bottom:10px;transform:translateX(-50%);background:#000d;padding:8px 14px;border-radius:12px;max-width:90%;text-align:center;opacity:0;transition:opacity .2s;pointer-events:none}
+#toast.s{opacity:1}
+#flash{position:absolute;inset:0;background:#fff;opacity:0;pointer-events:none}
+#flash.f{animation:fl .25s}@keyframes fl{from{opacity:.8}to{opacity:0}}
+#side{display:flex;flex-direction:column;gap:8px}#side button{flex:1;font-size:15px}
+#sel.on{background:var(--g);border-color:#4ade80}
+#bImg{border-color:#e5e9f0}#bMaj{border-color:var(--r)}#bMin{border-color:var(--a)}
+#bVid.rec{background:var(--r);animation:bl 1s infinite}@keyframes bl{50%{opacity:.7}}
+#bScan.on{background:var(--a);color:#000}
+#modal{position:fixed;inset:0;background:#000a;display:flex;align-items:center;justify-content:center;padding:12px;z-index:9}
+#modal[hidden]{display:none}
+.card{background:var(--pan);border-radius:16px;padding:14px;width:min(520px,100%);max-height:92dvh;overflow:auto;display:flex;flex-direction:column;gap:8px}
+.card input{padding:10px;border-radius:10px;border:2px solid var(--line);background:var(--bg);color:var(--tx);font:inherit}
+.card img{max-width:100%;max-height:70dvh;object-fit:contain;border-radius:8px}
+.card .it.on{background:var(--g)}.card .it{text-align:left}.card small{color:var(--mut)}
+@media(orientation:portrait){#app{grid-template-columns:1fr;grid-template-rows:auto 1fr auto}#top{grid-column:1;overflow-x:auto}#top button{flex:0 0 auto;padding:6px 12px}#side{flex-direction:row}#side button{min-height:64px}#hud{max-width:55%}}
+</style></head><body>
+<div id="app">
+ <div id="top">
+  <button id="bUp">Upload Excel File</button><button id="sel">Select Article</button><button id="bClr">Clear EXL Data</button><button id="bPrev">Preview Last Image</button><button id="bScan">Barcode Scan</button>
+ </div>
+ <div id="view"><video id="v" playsinline muted autoplay></video><div id="hud">No article selected</div>
+  <div id="tools"><button id="tPw" title="Camera on/off">⏻</button><button id="tFlip" title="Switch camera">⟲</button><button id="tSto" title="Storage">💾</button></div>
+  <div id="flash"></div><div id="toast"></div></div>
+ <div id="side"><button id="bImg">Image</button><button id="bMaj">Major</button><button id="bMin">Minor</button><button id="bVid">Video Record</button></div>
+</div>
+<div id="modal" hidden></div>
+<input id="file" type="file" accept=".xlsx,.xls,.xlsm,.csv" hidden>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script>
+const $=s=>document.querySelector(s),video=$('#v'),sleep=ms=>new Promise(r=>setTimeout(r,ms));
+const clean=s=>String(s).replace(/[\\/:*?"<>|]+/g,'_').trim(),esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+/* ---------- IndexedDB (settings + in-app file store) ---------- */
+const idb=new Promise((res,rej)=>{const q=indexedDB.open('qccam',1);q.onupgradeneeded=()=>{q.result.createObjectStore('kv');q.result.createObjectStore('files')};q.onsuccess=()=>res(q.result);q.onerror=()=>rej(q.error)});
+const tx=async(st,mode,fn)=>{const d=await idb;return new Promise((res,rej)=>{const t=d.transaction(st,mode);const r=fn(t.objectStore(st));t.oncomplete=()=>res(r&&r.result);t.onerror=()=>rej(t.error)})};
+const kget=k=>tx('kv','readonly',s=>s.get(k)),kset=(k,v)=>tx('kv','readwrite',s=>s.put(v,k)),kdel=k=>tx('kv','readwrite',s=>s.delete(k));
+let S={wb:null,items:[],sel:null},dir=null;
+/* ---------- Storage layer: real folder (if allowed) or in-app ---------- */
+async function perm(){if(!dir)return true;try{if(await dir.queryPermission({mode:'readwrite'})==='granted')return true;return await dir.requestPermission({mode:'readwrite'})==='granted'}catch{return false}}
+const folderName=()=>`${clean(S.sel.po)} - ${clean(S.sel.art)}`;
+async function sub(f,create){let d=await dir.getDirectoryHandle(clean(S.wb),{create});return f?d.getDirectoryHandle(f,{create}):d}
+async function listNames(f){
+ if(dir){try{const d=await sub(f,true),a=[];for await(const k of d.keys())a.push(k);return a}catch{return[]}}
+ const p=`${clean(S.wb)}/${f}/`,ks=await tx('files','readonly',s=>s.getAllKeys());return ks.filter(k=>k.startsWith(p)).map(k=>k.slice(p.length))}
+async function writeFile(f,name,blob){
+ if(dir){const d=await sub(f,true),h=await d.getFileHandle(name,{create:true}),w=await h.createWritable();await w.write(blob);await w.close();return}
+ await tx('files','readwrite',s=>s.put(blob,`${clean(S.wb)}/${f}/${name}`))}
+let Q=Promise.resolve();
+const save=(prefix,ext,blob,isImg)=>Q=Q.then(async()=>{
+ const f=folderName(),names=await listNames(f),re=new RegExp('^'+prefix.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+' (\\d+)\\.','i');let n=0;
+ names.forEach(x=>{const m=x.match(re);if(m)n=Math.max(n,+m[1])});
+ const name=`${prefix} ${n+1}.${ext}`;await writeFile(f,name,blob);
+ if(isImg)await kset('last',{name,blob});return name}).catch(e=>{toast('Save failed: '+e.message,4000)});
+/* ---------- UI helpers ---------- */
+let tt;function toast(m,ms=2200){const t=$('#toast');t.textContent=m;t.classList.add('s');clearTimeout(tt);tt=setTimeout(()=>t.classList.remove('s'),ms)}
+function flash(){const f=$('#flash');f.classList.remove('f');void f.offsetWidth;f.classList.add('f')}
+const modal=$('#modal');modal.onclick=e=>{if(e.target===modal)modal.hidden=true};
+const sheet=h=>{modal.innerHTML=`<div class="card">${h}</div>`;modal.hidden=false};
+function ui(){
+ const s=S.sel,b=$('#sel');b.classList.toggle('on',!!s);b.textContent=s?`${s.po} - ${s.art}`:'Select Article';
+ $('#hud').innerHTML=S.wb?`${esc(S.wb)}<br>${s?esc(folderName()):'No article selected'}`:'Upload an Excel file';
+ $('#bVid').classList.toggle('rec',!!rec);$('#bScan').classList.toggle('on',scanning);
+ $('#bScan').textContent=scanning?'Scanning… (tap to stop)':'Barcode Scan';
+ $('#tPw').classList.toggle('on',!!stream);$('#tSto').title=dir?'Saving to phone folder':'Saving in app'}
+async function need(){if(!S.sel){toast('Select an article first');return false}if(dir&&!await perm()){toast('Folder permission needed');return false}return true}
+/* ---------- Excel ---------- */
+$('#bUp').onclick=()=>$('#file').click();
+$('#file').onchange=async e=>{const f=e.target.files[0];e.target.value='';if(!f)return;
+ try{const wb=XLSX.read(await f.arrayBuffer(),{type:'array'}),items=[],seen=new Set();
+  for(const sn of wb.SheetNames){const rows=XLSX.utils.sheet_to_json(wb.Sheets[sn],{header:1,defval:''});
+   for(let r=0;r<Math.min(rows.length,40);r++){const h=rows[r].map(c=>String(c).trim());
+    const ai=h.findIndex(c=>/article/i.test(c)),pi=h.findIndex(c=>/(^|\W)p\.?o\.?(\W|$)|purchase\s*order/i.test(c));
+    if(ai<0||pi<0)continue;
+    for(let i=r+1;i<rows.length;i++){const art=String(rows[i][ai]).trim(),po=String(rows[i][pi]).trim();
+     if(!art||!po||seen.has(po+'|'+art))continue;seen.add(po+'|'+art);items.push({po,art})}break}}
+  if(!items.length)return toast('No "Article" and "PO" columns found',4000);
+  S={wb:f.name.replace(/\.[^.]+$/,''),items,sel:null};await kset('data',S);
+  if(dir&&await perm())await sub('',true);ui();toast(`${items.length} articles loaded`)}
+ catch(err){toast('Could not read file: '+err.message,4000)}};
+$('#sel').onclick=()=>{if(!S.items.length)return toast('Upload an Excel file first');
+ const draw=q=>S.items.map((x,i)=>({x,i})).filter(o=>(o.x.po+' '+o.x.art).toLowerCase().includes(q)).map(o=>`<button class="it ${S.sel&&S.sel.po==o.x.po&&S.sel.art==o.x.art?'on':''}" data-i="${o.i}">${esc(o.x.po)} - ${esc(o.x.art)}</button>`).join('');
+ sheet(`<input id="q" placeholder="Search article or PO" autocomplete="off"><div id="lst" style="display:flex;flex-direction:column;gap:6px">${draw('')}</div>`);
+ $('#q').oninput=e=>$('#lst').innerHTML=draw(e.target.value.toLowerCase().trim());
+ $('#lst').onclick=async e=>{const b=e.target.closest('.it');if(!b)return;S.sel=S.items[+b.dataset.i];await kset('data',S);
+  if(dir)await perm();await listNames(folderName());modal.hidden=true;ui();toast('Folder: '+folderName())}};
+$('#bClr').onclick=async()=>{if(!confirm('Clear Excel data? Saved images, videos and folders stay.'))return;await kdel('data');S={wb:null,items:[],sel:null};ui();toast('Excel data cleared')};
+$('#bPrev').onclick=async()=>{const l=await kget('last');if(!l)return toast('No image saved yet');const u=URL.createObjectURL(l.blob);sheet(`<img src="${u}"><small>${esc(l.name)}</small><button onclick="modal.hidden=true">Close</button>`)};
+/* ---------- Camera ---------- */
+let stream,facing='environment';
+async function camOn(){camOff();const v={facingMode:{ideal:facing},width:{ideal:1920},height:{ideal:1080}};
+ try{stream=await navigator.mediaDevices.getUserMedia({video:v,audio:true})}catch{try{stream=await navigator.mediaDevices.getUserMedia({video:v,audio:false})}catch(e){toast('Camera blocked: '+e.name,4000);ui();return}}
+ video.srcObject=stream;ui()}
+function camOff(){if(rec)rec.stop();scanning=false;stream&&stream.getTracks().forEach(t=>t.stop());stream=null;video.srcObject=null;ui()}
+$('#tPw').onclick=()=>{if(stream){window._off=1;camOff()}else{window._off=0;camOn()}};
+$('#tFlip').onclick=()=>{facing=facing==='environment'?'user':'environment';camOn()};
+function frame(){if(!video.videoWidth)return null;const c=document.createElement('canvas');c.width=video.videoWidth;c.height=video.videoHeight;c.getContext('2d').drawImage(video,0,0);return c}
+const toBlob=c=>new Promise(r=>c.toBlob(r,'image/jpeg',.92));
+async function snap(kind){if(!await need())return;const c=frame();if(!c)return toast('Camera is off');flash();
+ const p=kind==='img'?clean(S.sel.art):kind;const n=await save(p,'jpg',await toBlob(c),true);if(n)toast('Saved '+n)}
+$('#bImg').onclick=()=>snap('img');$('#bMaj').onclick=()=>snap('MAJOR');$('#bMin').onclick=()=>snap('MINOR');
+/* ---------- Video ---------- */
+let rec,rt;
+$('#bVid').onclick=async()=>{if(rec){rec.stop();return}if(!stream)return toast('Turn the camera on');if(!await need())return;
+ const mt=['video/mp4','video/webm;codecs=vp9,opus','video/webm'].find(t=>MediaRecorder.isTypeSupported(t))||'',r=new MediaRecorder(stream,mt?{mimeType:mt}:{}),ch=[];rec=r;
+ r.ondataavailable=e=>e.data.size&&ch.push(e.data);
+ r.onstop=async()=>{clearInterval(rt);rec=null;$('#bVid').textContent='Video Record';ui();const type=r.mimeType||mt||'video/webm',n=await save('Video',type.includes('mp4')?'mp4':'webm',new Blob(ch,{type}));if(n)toast('Saved '+n)};
+ r.start(1000);const t0=Date.now();rt=setInterval(()=>{const s=Math.floor((Date.now()-t0)/1000);$('#bVid').textContent='■ '+String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0')},500);ui()};
+/* ---------- Barcode ---------- */
+let scanning=false;
+const loadZX=()=>window.ZXing?0:new Promise((a,b)=>{const s=document.createElement('script');s.src='https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js';s.onload=a;s.onerror=b;document.head.appendChild(s)});
+$('#bScan').onclick=async()=>{if(scanning){scanning=false;ui();return}if(!stream)return toast('Turn the camera on');if(!await need())return;
+ let det=null,zx=null;if('BarcodeDetector' in window){try{det=new BarcodeDetector()}catch{}}
+ if(!det){try{await loadZX();zx=new ZXing.BrowserMultiFormatReader()}catch{return toast('Barcode scanner unavailable offline',4000)}}
+ scanning=true;ui();toast('Point at the barcode…',30000);const end=Date.now()+30000;let found=false;
+ while(scanning&&Date.now()<end){const c=frame();let code=null;
+  if(c){try{if(det){const r=await det.detect(c);code=r[0]&&r[0].rawValue}else code=zx.decodeFromCanvas(c).getText()}catch{}}
+  if(code){found=true;const g=c.getContext('2d'),h=Math.round(c.height/10);g.fillStyle='rgba(0,0,0,.7)';g.fillRect(0,c.height-h,c.width,h);
+   g.fillStyle='#fff';g.font=`bold ${Math.round(h*.55)}px sans-serif`;g.textBaseline='middle';g.fillText('Barcode: '+code,h*.3,c.height-h/2);
+   flash();const n=await save(clean(S.sel.art),'jpg',await toBlob(c),true);toast(n?`${code} → ${n}`:'Save failed',3500);break}
+  await sleep(200)}
+ if(!found&&scanning)toast('No barcode found');scanning=false;ui()};
+/* ---------- Storage sheet + ZIP export ---------- */
+const crcT=(()=>{const t=[];for(let n=0;n<256;n++){let c=n;for(let k=0;k<8;k++)c=c&1?0xEDB88320^(c>>>1):c>>>1;t[n]=c>>>0}return t})();
+const crc=u=>{let c=-1;for(let i=0;i<u.length;i++)c=crcT[(c^u[i])&255]^(c>>>8);return(c^-1)>>>0};
+async function zipBlob(es){const enc=new TextEncoder(),parts=[],cd=[];let off=0;
+ for(const e of es){const u=new Uint8Array(await e.blob.arrayBuffer()),nm=enc.encode(e.name),c=crc(u);
+  const l=new DataView(new ArrayBuffer(30));l.setUint32(0,0x04034b50,1);l.setUint16(4,20,1);l.setUint16(6,0x800,1);l.setUint16(12,33,1);l.setUint32(14,c,1);l.setUint32(18,u.length,1);l.setUint32(22,u.length,1);l.setUint16(26,nm.length,1);
+  const h=new DataView(new ArrayBuffer(46));h.setUint32(0,0x02014b50,1);h.setUint16(4,20,1);h.setUint16(6,20,1);h.setUint16(8,0x800,1);h.setUint16(14,33,1);h.setUint32(16,c,1);h.setUint32(20,u.length,1);h.setUint32(24,u.length,1);h.setUint16(28,nm.length,1);h.setUint32(42,off,1);
+  parts.push(l,nm,u);cd.push(h,nm);off+=30+nm.length+u.length}
+ let cs=0;cd.forEach(x=>cs+=x.byteLength||x.length);const e=new DataView(new ArrayBuffer(22));e.setUint32(0,0x06054b50,1);e.setUint16(8,es.length,1);e.setUint16(10,es.length,1);e.setUint32(12,cs,1);e.setUint32(16,off,1);
+ return new Blob([...parts,...cd,e],{type:'application/zip'})}
+$('#tSto').onclick=async()=>{const n=(await tx('files','readonly',s=>s.getAllKeys())).length,fs='showDirectoryPicker' in window;
+ sheet(`<b>Where files are saved</b><small>${dir?'Phone folder: '+esc(dir.name):'Inside the app ('+n+' files)'}</small>
+ ${fs?'<button id="sDir">Choose phone folder</button>':'<small>This browser cannot write to phone folders directly. Use Export ZIP to get your folders out.</small>'}
+ ${dir?'<button id="sApp">Use in-app storage</button>':''}<button id="sZip">Export in-app files as ZIP</button><button onclick="modal.hidden=true">Close</button>`);
+ if(fs)$('#sDir').onclick=async()=>{try{dir=await showDirectoryPicker({mode:'readwrite'});await kset('dir',dir);modal.hidden=true;ui();toast('Saving to '+dir.name)}catch{}};
+ if(dir)$('#sApp').onclick=async()=>{dir=null;await kdel('dir');modal.hidden=true;ui();toast('Saving in app')};
+ $('#sZip').onclick=async()=>{const d=await idb,ks=await tx('files','readonly',s=>s.getAllKeys()),vs=await tx('files','readonly',s=>s.getAll());
+  if(!ks.length)return toast('No in-app files yet');const z=await zipBlob(ks.map((k,i)=>({name:k,blob:vs[i]}))),f=new File([z],'QC-Photos.zip',{type:'application/zip'});
+  if(navigator.canShare&&navigator.canShare({files:[f]}))try{await navigator.share({files:[f]})}catch{}else{const a=document.createElement('a');a.href=URL.createObjectURL(z);a.download=f.name;a.click()}}};
+/* ---------- Boot ---------- */
+(async()=>{try{navigator.storage&&navigator.storage.persist&&navigator.storage.persist()}catch{}
+ S=await kget('data')||S;dir=await kget('dir')||null;ui();camOn();
+ if('serviceWorker' in navigator)navigator.serviceWorker.register('sw.js').catch(()=>{});
+ document.addEventListener('visibilitychange',()=>{if(!document.hidden&&!stream&&!window._off)camOn()})})();
+</script></body></html>
