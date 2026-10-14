@@ -44,6 +44,7 @@ video{width:100%;height:100%;object-fit:contain;display:block}
  <div id="side"><button id="bImg">Image</button><button id="bMaj">Major</button><button id="bMin">Minor</button><button id="bVid">Video Record</button></div>
 </div>
 <div id="modal" hidden></div>
+<input id="nat" type="file" accept="image/*" capture="environment" hidden><input id="natV" type="file" accept="video/*" capture="environment" hidden>
 <input id="file" type="file" accept=".xlsx,.xls,.xlsm,.csv" hidden>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
@@ -53,7 +54,7 @@ const clean=s=>String(s).replace(/[\\/:*?"<>|]+/g,'_').trim(),esc=s=>String(s).r
 const idb=new Promise((res,rej)=>{const q=indexedDB.open('qccam',1);q.onupgradeneeded=()=>{q.result.createObjectStore('kv');q.result.createObjectStore('files')};q.onsuccess=()=>res(q.result);q.onerror=()=>rej(q.error)});
 const tx=async(st,mode,fn)=>{const d=await idb;return new Promise((res,rej)=>{const t=d.transaction(st,mode);const r=fn(t.objectStore(st));t.oncomplete=()=>res(r&&r.result);t.onerror=()=>rej(t.error)})};
 const kget=k=>tx('kv','readonly',s=>s.get(k)),kset=(k,v)=>tx('kv','readwrite',s=>s.put(v,k)),kdel=k=>tx('kv','readwrite',s=>s.delete(k));
-let S={wb:null,items:[],sel:null},dir=null;
+let S={wb:null,items:[],sel:null},dir=null,nativeMode=true;
 /* ---------- Storage layer: real folder (if allowed) or in-app ---------- */
 async function perm(){if(!dir)return true;try{if(await dir.queryPermission({mode:'readwrite'})==='granted')return true;return await dir.requestPermission({mode:'readwrite'})==='granted'}catch{return false}}
 const folderName=()=>`${clean(S.sel.po)} - ${clean(S.sel.art)}`;
@@ -63,7 +64,8 @@ async function listNames(f){
  const p=`${clean(S.wb)}/${f}/`,ks=await tx('files','readonly',s=>s.getAllKeys());return ks.filter(k=>k.startsWith(p)).map(k=>k.slice(p.length))}
 async function writeFile(f,name,blob){
  if(dir){const d=await sub(f,true),h=await d.getFileHandle(name,{create:true}),w=await h.createWritable();await w.write(blob);await w.close();return}
- await tx('files','readwrite',s=>s.put(blob,`${clean(S.wb)}/${f}/${name}`))}
+ await tx('files','readwrite',s=>s.put(blob,`${clean(S.wb)}/${f}/${name}`));
+ const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`${clean(S.wb)} - ${f} - ${name}`;document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove()},4000)}
 let Q=Promise.resolve();
 const save=(prefix,ext,blob,isImg)=>Q=Q.then(async()=>{
  const f=folderName(),names=await listNames(f),re=new RegExp('^'+prefix.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+' (\\d+)\\.','i');let n=0;
@@ -81,7 +83,10 @@ function ui(){
  $('#bVid').classList.toggle('rec',!!rec);$('#bScan').classList.toggle('on',scanning);
  $('#bScan').textContent=scanning?'Scanning… (tap to stop)':'Barcode Scan';
  $('#tPw').classList.toggle('on',!!stream);$('#tSto').title=dir?'Saving to phone folder':'Saving in app'}
-async function need(){if(!S.sel){toast('Select an article first');return false}if(dir&&!await perm()){toast('Folder permission needed');return false}return true}
+async function chooseDir(){try{dir=await showDirectoryPicker({mode:'readwrite'});await kset('dir',dir);await kdel('noDir');modal.hidden=true;ui();toast('Saving to '+dir.name)}catch(e){if(e.name!=='AbortError')toast('Android blocked that folder. Pick a sub-folder you created inside DCIM or Download.',5000)}}
+function folderHelp(){sheet(`<b>One-time setup: choose where to save</b><small>Android does not let a web app pick the DCIM or Download folder itself. In your Files app, first create a folder (for example "QC Photos") inside DCIM or Download. Then tap the button below and tap "Use this folder". Workbook folders are created inside it, and you will not be asked again.</small><button id="fPick">Choose folder</button><button id="fSkip">Skip: save in app + copy to Downloads</button>`);$('#fPick').onclick=chooseDir;$('#fSkip').onclick=async()=>{await kset('noDir',1);modal.hidden=true;toast('Saving in app + Downloads copy')}}
+async function need(){if(!S.sel){toast('Select an article first');return false}
+ if(!dir&&'showDirectoryPicker' in window&&!(await kget('noDir'))){folderHelp();return false}if(dir&&!await perm()){toast('Folder permission needed');return false}return true}
 /* ---------- Excel ---------- */
 $('#bUp').onclick=()=>$('#file').click();
 $('#file').onchange=async e=>{const f=e.target.files[0];e.target.value='';if(!f)return;
@@ -124,14 +129,21 @@ async function fullPhoto(){
   const o={};if(cap.imageWidth&&cap.imageHeight){const W=cap.imageWidth.max,H=cap.imageHeight.max,k=Math.min(1,LONG/Math.max(W,H));
    o.imageWidth=Math.max(cap.imageWidth.min||0,Math.round(W*k));o.imageHeight=Math.max(cap.imageHeight.min||0,Math.round(H*k))}
   return await ic.takePhoto(o)}catch{return null}}
-async function snap(kind){if(!await need())return;if(!stream)return toast('Camera is off');flash();
+async function snap(kind){if(!await need())return;if(nativeMode)return native(kind==='img'?clean(S.sel.art):kind);if(!stream)return toast('Camera is off');flash();
  let b=await fullPhoto();if(!b){const c=frame();if(!c)return toast('Camera is off');b=await toBlob(c)}
  b=await limit(b);
  const p=kind==='img'?clean(S.sel.art):kind;save(p,'jpg',b,true).then(n=>n&&toast('Saved '+n+' ('+Math.round(b.size/1024)+' KB)'))}
 $('#bImg').onclick=()=>snap('img');$('#bMaj').onclick=()=>snap('MAJOR');$('#bMin').onclick=()=>snap('MINOR');
+/* ---------- Phone camera app ---------- */
+let pend;
+function native(prefix,vid){pend={prefix,vid};if(stream){stream.getTracks().forEach(t=>t.stop());stream=null;video.srcObject=null;ui()}(vid?$('#natV'):$('#nat')).click()}
+async function got(e){const f=e.target.files[0];e.target.value='';
+ if(f&&pend){const m=f.name.match(/\.(\w{2,4})$/),ext=m?m[1].toLowerCase():pend.vid?'mp4':'jpg',n=await save(pend.prefix,ext,f,!pend.vid);if(n)toast('Saved '+n+' ('+(f.size/1048576).toFixed(1)+' MB)')}
+ if(!window._off&&!stream)camOn()}
+$('#nat').onchange=got;$('#natV').onchange=got;
 /* ---------- Video ---------- */
 let rec,rt;
-$('#bVid').onclick=async()=>{if(rec){rec.stop();return}if(!stream)return toast('Turn the camera on');if(!await need())return;
+$('#bVid').onclick=async()=>{if(rec){rec.stop();return}if(nativeMode){if(!await need())return;return native('Video',1)}if(!stream)return toast('Turn the camera on');if(!await need())return;
  const mt=['video/mp4','video/webm;codecs=vp9,opus','video/webm'].find(t=>MediaRecorder.isTypeSupported(t))||'',r=new MediaRecorder(stream,mt?{mimeType:mt}:{}),ch=[];rec=r;
  r.ondataavailable=e=>e.data.size&&ch.push(e.data);
  r.onstop=async()=>{clearInterval(rt);rec=null;$('#bVid').textContent='Video Record';ui();const type=r.mimeType||mt||'video/webm',n=await save('Video',type.includes('mp4')?'mp4':'webm',new Blob(ch,{type}));if(n)toast('Saved '+n)};
@@ -162,16 +174,17 @@ async function zipBlob(es){const enc=new TextEncoder(),parts=[],cd=[];let off=0;
  return new Blob([...parts,...cd,e],{type:'application/zip'})}
 $('#tSto').onclick=async()=>{const n=(await tx('files','readonly',s=>s.getAllKeys())).length,fs='showDirectoryPicker' in window;
  sheet(`<b>Where files are saved</b><small>${dir?'Phone folder: '+esc(dir.name):'Inside the app ('+n+' files)'}</small>
- ${fs?'<button id="sDir">Choose phone folder</button>':'<small>This browser cannot write to phone folders directly. Use Export ZIP to get your folders out.</small>'}
+ <button id="sMode">Camera: ${nativeMode?'Phone camera app (full quality)':'In-app live camera'} - tap to switch</button>${fs?'<button id="sDir">Choose phone folder</button>':'<small>This browser cannot write to phone folders directly. Use Export ZIP to get your folders out.</small>'}
  ${dir?'<button id="sApp">Use in-app storage</button>':''}<button id="sZip">Export in-app files as ZIP</button><button onclick="modal.hidden=true">Close</button>`);
- if(fs)$('#sDir').onclick=async()=>{try{dir=await showDirectoryPicker({mode:'readwrite'});await kset('dir',dir);modal.hidden=true;ui();toast('Saving to '+dir.name)}catch{}};
+ $('#sMode').onclick=async()=>{nativeMode=!nativeMode;await kset('native',nativeMode);modal.hidden=true;toast(nativeMode?'Using phone camera app':'Using in-app camera')};
+ if(fs)$('#sDir').onclick=chooseDir;
  if(dir)$('#sApp').onclick=async()=>{dir=null;await kdel('dir');modal.hidden=true;ui();toast('Saving in app')};
  $('#sZip').onclick=async()=>{const d=await idb,ks=await tx('files','readonly',s=>s.getAllKeys()),vs=await tx('files','readonly',s=>s.getAll());
   if(!ks.length)return toast('No in-app files yet');const z=await zipBlob(ks.map((k,i)=>({name:k,blob:vs[i]}))),f=new File([z],'QC-Photos.zip',{type:'application/zip'});
   if(navigator.canShare&&navigator.canShare({files:[f]}))try{await navigator.share({files:[f]})}catch{}else{const a=document.createElement('a');a.href=URL.createObjectURL(z);a.download=f.name;a.click()}}};
 /* ---------- Boot ---------- */
 (async()=>{try{navigator.storage&&navigator.storage.persist&&navigator.storage.persist()}catch{}
- S=await kget('data')||S;dir=await kget('dir')||null;ui();camOn();
+ S=await kget('data')||S;nativeMode=(await kget('native'))!==false;dir=await kget('dir')||null;ui();camOn();
  if('serviceWorker' in navigator)navigator.serviceWorker.register('sw.js').catch(()=>{});
  document.addEventListener('visibilitychange',()=>{if(!document.hidden&&!stream&&!window._off)camOn()})})();
 </script></body></html>
