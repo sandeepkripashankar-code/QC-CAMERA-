@@ -111,9 +111,9 @@ $('#bClr').onclick=async()=>{if(!confirm('Clear Excel data? Saved images, videos
 $('#bPrev').onclick=async()=>{const l=await kget('last');if(!l)return toast('No image saved yet');const u=URL.createObjectURL(l.blob);sheet(`<img src="${u}"><small>${esc(l.name)}</small><button onclick="modal.hidden=true">Close</button>`)};
 /* ---------- Camera ---------- */
 let stream,facing='environment';
-async function camOn(){camOff();const v={facingMode:{ideal:facing},width:{ideal:1920},height:{ideal:1080}};
+async function camOn(){camOff();const v={facingMode:{ideal:facing},width:{ideal:3840},height:{ideal:2160}};
  try{stream=await navigator.mediaDevices.getUserMedia({video:v,audio:true})}catch{try{stream=await navigator.mediaDevices.getUserMedia({video:v,audio:false})}catch(e){toast('Camera blocked: '+e.name,4000);ui();return}}
- video.srcObject=stream;ui()}
+ video.srcObject=stream;ui();try{await stream.getVideoTracks()[0].applyConstraints({advanced:[{focusMode:'continuous'},{exposureMode:'continuous'},{whiteBalanceMode:'continuous'}]})}catch{}}
 function camOff(){if(rec)rec.stop();scanning=false;stream&&stream.getTracks().forEach(t=>t.stop());stream=null;video.srcObject=null;ui()}
 $('#tPw').onclick=()=>{if(stream){window._off=1;camOff()}else{window._off=0;camOn()}};
 $('#tFlip').onclick=()=>{facing=facing==='environment'?'user':'environment';camOn()};
@@ -126,7 +126,7 @@ async function limit(b){if(b.size<=MAXB)return b;
  return b}
 async function fullPhoto(){
  try{const t=stream&&stream.getVideoTracks()[0];if(!t||!window.ImageCapture)return null;const ic=new ImageCapture(t),cap=await ic.getPhotoCapabilities();
-  const o={};if(cap.imageWidth&&cap.imageHeight){const W=cap.imageWidth.max,H=cap.imageHeight.max,k=Math.min(1,LONG/Math.max(W,H));
+  const o={fillLightMode:'off',redEyeReduction:false};if(cap.imageWidth&&cap.imageHeight){const W=cap.imageWidth.max,H=cap.imageHeight.max,k=Math.min(1,LONG/Math.max(W,H));
    o.imageWidth=Math.max(cap.imageWidth.min||0,Math.round(W*k));o.imageHeight=Math.max(cap.imageHeight.min||0,Math.round(H*k))}
   return await ic.takePhoto(o)}catch{return null}}
 async function snap(kind){if(!await need())return;if(nativeMode)return native(kind==='img'?clean(S.sel.art):kind);if(!stream)return toast('Camera is off');flash();
