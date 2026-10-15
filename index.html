@@ -90,8 +90,8 @@ async function need(){if(!S.sel){toast('Select an article first');return false}
 /* ---------- Excel ---------- */
 $('#bUp').onclick=()=>$('#file').click();
 $('#file').onchange=async e=>{const f=e.target.files[0];e.target.value='';if(!f)return;
- try{const wb=XLSX.read(await f.arrayBuffer(),{type:'array'}),items=[],seen=new Set();
-  for(const sn of wb.SheetNames){const rows=XLSX.utils.sheet_to_json(wb.Sheets[sn],{header:1,defval:''});
+ try{const wb=XLSX.read(await f.arrayBuffer(),{type:'array',raw:/\.(csv|txt)$/i.test(f.name)}),items=[],seen=new Set();
+  for(const sn of wb.SheetNames){const rows=XLSX.utils.sheet_to_json(wb.Sheets[sn],{header:1,defval:'',raw:false});
    for(let r=0;r<Math.min(rows.length,40);r++){const h=rows[r].map(c=>String(c).trim());
     const ai=h.findIndex(c=>/article/i.test(c)),pi=h.findIndex(c=>/(^|\W)p\.?o\.?(\W|$)|purchase\s*order/i.test(c));
     if(ai<0||pi<0)continue;
@@ -118,8 +118,8 @@ function camOff(){if(rec)rec.stop();scanning=false;stream&&stream.getTracks().fo
 $('#tPw').onclick=()=>{if(stream){window._off=1;camOff()}else{window._off=0;camOn()}};
 $('#tFlip').onclick=()=>{facing=facing==='environment'?'user':'environment';camOn()};
 function frame(){if(!video.videoWidth)return null;const c=document.createElement('canvas');c.width=video.videoWidth;c.height=video.videoHeight;c.getContext('2d').drawImage(video,0,0);return c}
-const toBlob=c=>new Promise(r=>c.toBlob(r,'image/jpeg',.97));
-const MAXB=1.5*1024*1024,LONG=2560; /* LONG = longest side in pixels (about 5 MP, roughly 1-1.5 MB) */
+const toBlob=c=>new Promise(r=>c.toBlob(r,'image/jpeg',.99));
+const MAXB=Infinity,LONG=100000; /* no size or resolution limit: best quality */ /* LONG = longest side in pixels (about 5 MP, roughly 1-1.5 MB) */
 async function limit(b){if(b.size<=MAXB)return b;
  const bm=await createImageBitmap(b),c=document.createElement('canvas');c.width=bm.width;c.height=bm.height;c.getContext('2d').drawImage(bm,0,0);
  for(const q of[.8,.65]){const o=await new Promise(r=>c.toBlob(r,'image/jpeg',q));if(o.size<=MAXB)return o}
