@@ -111,15 +111,15 @@ $('#bClr').onclick=async()=>{if(!confirm('Clear Excel data? Saved images, videos
 $('#bPrev').onclick=async()=>{const l=await kget('last');if(!l)return toast('No image saved yet');const u=URL.createObjectURL(l.blob);sheet(`<img src="${u}"><small>${esc(l.name)}</small><button onclick="modal.hidden=true">Close</button>`)};
 /* ---------- Camera ---------- */
 let stream,facing='environment';
-async function camOn(){camOff();const v={facingMode:{ideal:facing},width:{ideal:3840},height:{ideal:2160}};
+async function camOn(){if(nativeMode)return;camOff();const v={facingMode:{ideal:facing},width:{ideal:3840},height:{ideal:2160}};
  try{stream=await navigator.mediaDevices.getUserMedia({video:v,audio:true})}catch{try{stream=await navigator.mediaDevices.getUserMedia({video:v,audio:false})}catch(e){toast('Camera blocked: '+e.name,4000);ui();return}}
  video.srcObject=stream;ui();try{await stream.getVideoTracks()[0].applyConstraints({advanced:[{focusMode:'continuous'},{exposureMode:'continuous'},{whiteBalanceMode:'continuous'}]})}catch{}}
 function camOff(){if(rec)rec.stop();scanning=false;stream&&stream.getTracks().forEach(t=>t.stop());stream=null;video.srcObject=null;ui()}
-$('#tPw').onclick=()=>{if(stream){window._off=1;camOff()}else{window._off=0;camOn()}};
-$('#tFlip').onclick=()=>{facing=facing==='environment'?'user':'environment';camOn()};
+$('#tPw').onclick=()=>{if(nativeMode){toast('Using phone camera app mode');return}if(stream){window._off=1;camOff()}else{window._off=0;camOn()}};
+$('#tFlip').onclick=()=>{if(nativeMode){toast('Using phone camera app mode');return}facing=facing==='environment'?'user':'environment';camOn()};
 function frame(){if(!video.videoWidth)return null;const c=document.createElement('canvas');c.width=video.videoWidth;c.height=video.videoHeight;c.getContext('2d').drawImage(video,0,0);return c}
 const toBlob=c=>new Promise(r=>c.toBlob(r,'image/jpeg',.99));
-const MAXB=Infinity,LONG=100000; /* no size or resolution limit: best quality */ /* LONG = longest side in pixels (about 5 MP, roughly 1-1.5 MB) */
+const MAXB=Infinity,LONG=100000;
 async function limit(b){if(b.size<=MAXB)return b;
  const bm=await createImageBitmap(b),c=document.createElement('canvas');c.width=bm.width;c.height=bm.height;c.getContext('2d').drawImage(bm,0,0);
  for(const q of[.8,.65]){const o=await new Promise(r=>c.toBlob(r,'image/jpeg',q));if(o.size<=MAXB)return o}
@@ -139,7 +139,7 @@ let pend;
 function native(prefix,vid){pend={prefix,vid};if(stream){stream.getTracks().forEach(t=>t.stop());stream=null;video.srcObject=null;ui()}(vid?$('#natV'):$('#nat')).click()}
 async function got(e){const f=e.target.files[0];e.target.value='';
  if(f&&pend){const m=f.name.match(/\.(\w{2,4})$/),ext=m?m[1].toLowerCase():pend.vid?'mp4':'jpg',n=await save(pend.prefix,ext,f,!pend.vid);if(n)toast('Saved '+n+' ('+(f.size/1048576).toFixed(1)+' MB)')}
- if(!window._off&&!stream)camOn()}
+ if(!window._off&&!stream&&!nativeMode)camOn()}
 $('#nat').onchange=got;$('#natV').onchange=got;
 /* ---------- Video ---------- */
 let rec,rt;
@@ -151,7 +151,7 @@ $('#bVid').onclick=async()=>{if(rec){rec.stop();return}if(nativeMode){if(!await 
 /* ---------- Barcode ---------- */
 let scanning=false;
 const loadZX=()=>window.ZXing?0:new Promise((a,b)=>{const s=document.createElement('script');s.src='https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js';s.onload=a;s.onerror=b;document.head.appendChild(s)});
-$('#bScan').onclick=async()=>{if(scanning){scanning=false;ui();return}if(!stream)return toast('Turn the camera on');if(!await need())return;
+$('#bScan').onclick=async()=>{if(nativeMode){toast('Barcode scan requires live in-app camera mode. Switch in 💾 Storage menu.');return}if(scanning){scanning=false;ui();return}if(!stream)return toast('Turn the camera on');if(!await need())return;
  let det=null,zx=null;if('BarcodeDetector' in window){try{det=new BarcodeDetector()}catch{}}
  if(!det){try{await loadZX();zx=new ZXing.BrowserMultiFormatReader()}catch{return toast('Barcode scanner unavailable offline',4000)}}
  scanning=true;ui();toast('Point at the barcode…',30000);const end=Date.now()+30000;let found=false;
@@ -176,7 +176,7 @@ $('#tSto').onclick=async()=>{const n=(await tx('files','readonly',s=>s.getAllKey
  sheet(`<b>Where files are saved</b><small>${dir?'Phone folder: '+esc(dir.name):'Inside the app ('+n+' files)'}</small>
  <button id="sMode">Camera: ${nativeMode?'Phone camera app (full quality)':'In-app live camera'} - tap to switch</button>${fs?'<button id="sDir">Choose phone folder</button>':'<small>This browser cannot write to phone folders directly. Use Export ZIP to get your folders out.</small>'}
  ${dir?'<button id="sApp">Use in-app storage</button>':''}<button id="sZip">Export in-app files as ZIP</button><button onclick="modal.hidden=true">Close</button>`);
- $('#sMode').onclick=async()=>{nativeMode=!nativeMode;await kset('native',nativeMode);modal.hidden=true;toast(nativeMode?'Using phone camera app':'Using in-app camera')};
+ $('#sMode').onclick=async()=>{nativeMode=!nativeMode;await kset('native',nativeMode);modal.hidden=true;toast(nativeMode?'Using phone camera app':'Using in-app camera');if(!nativeMode)camOn();else camOff()};
  if(fs)$('#sDir').onclick=chooseDir;
  if(dir)$('#sApp').onclick=async()=>{dir=null;await kdel('dir');modal.hidden=true;ui();toast('Saving in app')};
  $('#sZip').onclick=async()=>{const d=await idb,ks=await tx('files','readonly',s=>s.getAllKeys()),vs=await tx('files','readonly',s=>s.getAll());
@@ -184,7 +184,8 @@ $('#tSto').onclick=async()=>{const n=(await tx('files','readonly',s=>s.getAllKey
   if(navigator.canShare&&navigator.canShare({files:[f]}))try{await navigator.share({files:[f]})}catch{}else{const a=document.createElement('a');a.href=URL.createObjectURL(z);a.download=f.name;a.click()}}};
 /* ---------- Boot ---------- */
 (async()=>{try{navigator.storage&&navigator.storage.persist&&navigator.storage.persist()}catch{}
- S=await kget('data')||S;nativeMode=(await kget('native'))!==false;dir=await kget('dir')||null;ui();camOn();
+ S=await kget('data')||S;nativeMode=(await kget('native'))!==false;dir=await kget('dir')||null;ui();
+ if(!nativeMode)camOn();
  if('serviceWorker' in navigator)navigator.serviceWorker.register('sw.js').catch(()=>{});
- document.addEventListener('visibilitychange',()=>{if(!document.hidden&&!stream&&!window._off)camOn()})})();
+ document.addEventListener('visibilitychange',()=>{if(!document.hidden&&!stream&&!window._off&&!nativeMode)camOn()})})();
 </script></body></html>
